@@ -6,6 +6,9 @@
     :license: BSD, see LICENSE for more details.
 """
 from num2words import num2words
+from wtforms import TextField, TextAreaField, IntegerField, FloatField, \
+    validators
+from wtforms.validators import ValidationError
 
 from trytond.model import ModelSQL, ModelView, Workflow, fields
 from trytond.pyson import Eval, If
@@ -15,6 +18,8 @@ from trytond.report import Report
 from jinja2 import Environment, PackageLoader
 from nereid import render_email
 from trytond.config import CONFIG
+
+from trytond.modules.nereid_cart_b2c.forms import AddtoCartForm
 
 
 __all__ = ['GiftCard', 'GiftCardReport']
@@ -305,3 +310,40 @@ class GiftCardReport(Report):
         return super(GiftCardReport, cls).parse(
             report, records, data, localcontext
         )
+
+
+class GiftCardForm(AddtoCartForm):
+    """
+    A form for purchasing gift cards
+    """
+
+    recipient_name = TextField('Recipient Name', [validators.Required(), ])
+    recipient_email = TextField(
+        'Recipient Email', [validators.Required(), validators.Email()]
+    )
+    message = TextAreaField('Message')
+    gc_price = IntegerField('GC Price')
+    amount = FloatField('Amount')
+
+    def validate_quantity(form, field):
+        if field.data <= 0:
+            raise ValidationError(
+                'Be sensible! You can only add real quantities to cart'
+            )
+
+    def validate_product(form, field):
+        Product = Pool().get('product.product')
+
+        if Product(field.data).template and not Product(field.data).template.salable:  # noqa
+            raise ValidationError("This product is not for sale")
+
+    def validate_amount(form, field):
+        Product = Pool().get('product.product')
+
+        if not field.data:
+            return
+
+        product = Product(form.product.data)
+
+        if field.data not in range(product.gc_min, product.gc_max):
+            raise ValidationError("Amount is invalid!")

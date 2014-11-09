@@ -9,7 +9,10 @@ from trytond.model import fields, ModelSQL, ModelView
 from trytond.pool import PoolMeta
 from trytond.pyson import Bool, Eval
 
-__all__ = ['Template', 'GiftCardPrice']
+from nereid import route, request
+from gift_card import GiftCardForm
+
+__all__ = ['Template', 'GiftCardPrice', 'Product']
 __metaclass__ = PoolMeta
 
 
@@ -171,3 +174,24 @@ class GiftCardPrice(ModelSQL, ModelView):
         """
         if self.price < 0:
             self.raise_user_error("negative_amount")
+
+
+class Product:
+    __name__ = "product.product"
+
+    @classmethod
+    @route('/product/<uri>')
+    @route('/product/<path:path>/<uri>')
+    def render(cls, uri, path=None):
+        """
+        Render gift card template if product is of type gift card
+        """
+        render_obj = super(Product, cls).render(uri, path)
+
+        if render_obj.context['product'].is_gift_card:
+            render_obj.template_name_or_list = [
+                '%s/catalog/gift-card.html' % request.nereid_website.name,
+                'catalog/gift-card.html'
+            ]
+            render_obj.context['form'] = GiftCardForm()
+        return render_obj

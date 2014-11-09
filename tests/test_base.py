@@ -12,7 +12,6 @@ DIR = os.path.abspath(os.path.normpath(os.path.join(
 )))
 if os.path.isdir(DIR):
     sys.path.insert(0, os.path.dirname(DIR))
-import unittest
 from datetime import date, datetime
 from decimal import Decimal
 from dateutil.relativedelta import relativedelta
@@ -20,9 +19,10 @@ from dateutil.relativedelta import relativedelta
 from trytond.tests.test_tryton import POOL, USER
 import trytond.tests.test_tryton
 from trytond.transaction import Transaction
+from nereid.testing import NereidTestCase
 
 
-class TestBase(unittest.TestCase):
+class TestBase(NereidTestCase):
     """
     Base Test Case for gift card
     """
@@ -43,6 +43,23 @@ class TestBase(unittest.TestCase):
         self.Sequence = POOL.get('ir.sequence')
         self.Account = POOL.get('account.account')
         self.GiftCard = POOL.get('gift_card.gift_card')
+        self.SaleShop = POOL.get('sale.shop')
+        self.PriceList = POOL.get('product.price_list')
+        self.StockLocation = POOL.get('stock.location')
+        self.NereidWebsite = POOL.get('nereid.website')
+        self.NereidUser = POOL.get('nereid.user')
+        self.Language = POOL.get('ir.lang')
+        self.Locale = POOL.get('nereid.website.locale')
+
+        self.templates = {
+            'shopping-cart.jinja':
+                'Cart:{{ cart.id }},{{get_cart_size()|round|int}},'
+                '{{cart.sale.total_amount}}',
+            'product.jinja':
+                '{{ product.name }}',
+            'catalog/gift-card.html':
+                '{{ product.id }}',
+        }
 
     def _create_fiscal_year(self, date_=None, company=None):
         """
@@ -161,6 +178,9 @@ class TestBase(unittest.TestCase):
         with Transaction().set_context(company=None):
             self.party, = self.Party.create([{
                 'name': 'Openlabs',
+                'addresses': [('create', [{
+                    'city': 'Melbourne',
+                }])],
             }])
             self.company, = self.Company.create([{
                 'party': self.party.id,
@@ -177,7 +197,7 @@ class TestBase(unittest.TestCase):
         self._create_coa_minimal(company=self.company.id)
         self.account_revenue = self._get_account_by_kind('revenue')
         self.account_expense = self._get_account_by_kind('expense')
-        self._create_payment_term()
+        self.payment_term = self._create_payment_term()
         self._create_fiscal_year()
 
         self.party1, = self.Party.create([{
@@ -186,10 +206,62 @@ class TestBase(unittest.TestCase):
                 'city': 'Melbourne',
             }])],
         }])
+        self.party2, = self.Party.create([{
+            'name': 'Guest party',
+            'addresses': [('create', [{
+                'city': 'Noida',
+            }])],
+        }])
 
         self.uom, = Uom.search([('name', '=', 'Unit')])
 
         self.product = self.create_product()
+
+        # Create a Sale Shop
+        self.price_list, = self.PriceList.create([{
+            'name': 'Test Price List',
+            'company': self.company.id,
+        }])
+        with Transaction().set_context(company=self.company.id):
+            self.shop, = self.SaleShop.create([{
+                'name': 'Test Shop',
+                'address': self.company.party.addresses[0].id,
+                'payment_term': self.payment_term,
+                'price_list': self.price_list,
+                'warehouse': self.StockLocation.search([
+                    ('type', '=', 'warehouse')
+                ])[0],
+            }])
+
+        User.write(
+            [User(USER)], {
+                'shops': [('add', [self.shop.id])],
+                'shop': self.shop.id,
+            }
+        )
+
+        # Create users and assign the pricelists to them
+        self.guest_user, = self.NereidUser.create([{
+            'party': self.party2.id,
+            'display_name': 'Guest User',
+            'email': 'guest@openlabs.co.in',
+            'password': 'password',
+            'company': self.company.id,
+        }])
+        self.registered_user, = self.NereidUser.create([{
+            'party': self.party1.id,
+            'display_name': 'Registered User',
+            'email': 'email@example.com',
+            'password': 'password',
+            'company': self.company.id,
+        }])
+        en_us, = self.Language.search([('code', '=', 'en_US')])
+        self.locale_en_us, = self.Locale.create([{
+            'code': 'en_US',
+            'language': en_us.id,
+            'currency': self.usd.id,
+        }])
+        self.create_website()
 
     def create_product(
         self, type='goods', mode='physical', is_gift_card=False,
@@ -232,6 +304,12 @@ class TestBase(unittest.TestCase):
                         }])
                     ]
                 })
+            else:
+                values.update({
+                    'allow_open_amount': True,
+                    'gc_min': 100,
+                    'gc_max': 400
+                })
 
         return Template.create([values])[0].products[0]
 
@@ -273,3 +351,40 @@ class TestBase(unittest.TestCase):
         )
         gateway.save()
         return gateway
+
+    def create_website(self):
+        """
+        Creates a website. Since the fields required to make this could
+        change depending on modules installed and this is a base test case
+        the creation is separated to another method
+        """
+        return self.NereidWebsite.create([{
+            'name': 'localhost',
+            'shop': self.shop,
+            'company': self.company.id,
+            'application_user': USER,
+            'default_locale': self.locale_en_us.id,
+            'guest_user': self.guest_user,
+        }])
+
+    def login(self, client, username, password, assert_=True):
+        """
+        Tries to login.
+        .. note::
+            This method MUST be called within a context
+        :param client: Instance of the test client
+        :param username: The username, usually email
+        :param password: The password to login
+        :param assert_: Boolean value to indicate if the login has to be
+                        ensured. If the login failed an assertion error would
+                        be raised
+        """
+        rv = client.post(
+            '/login', data={
+                'email': username,
+                'password': password,
+            }
+        )
+        if assert_:
+            self.assertEqual(rv.status_code, 302)
+        return rv

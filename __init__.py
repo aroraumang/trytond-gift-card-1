@@ -10,7 +10,8 @@ from .gift_card import GiftCard, GiftCardReport
 from sale import SaleLine, Sale
 from configuration import Configuration
 from gateway import PaymentGateway, PaymentTransaction
-from product import Template, GiftCardPrice
+from product import Template, GiftCardPrice, Product
+from cart import Cart
 
 
 def register():
@@ -23,6 +24,8 @@ def register():
         PaymentGateway,
         PaymentTransaction,
         Template,
+        Product,
+        Cart,
         module='gift_card', type_='model'
     )
     Pool.register(
